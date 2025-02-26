@@ -78,7 +78,7 @@ const CameraDetect = () => {
 
   // const { resize } = useResizePlugin();
   const objectDetection = useTensorflowModel(
-    require('../../assets/ai/best_float32.tflite'),
+    require('../../assets/ai/aimodel.tflite.tflite'),
   );
   const model =
     objectDetection.state === 'loaded' ? objectDetection.model : undefined;

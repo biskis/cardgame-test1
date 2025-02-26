@@ -2,7 +2,6 @@ import React, {useEffect, useRef, useState} from 'react';
 import {StyleSheet, View, Text, Button, Image} from 'react-native';
 import {useTensorflowModel} from 'react-native-fast-tflite';
 import {convertToRGB} from 'react-native-image-to-rgb';
-import RNFS from 'react-native-fs';
 import exampleImage from '../../assets/example.jpg'
 
 
@@ -73,11 +72,16 @@ const CameraDetect = () => {
   const model = objectDetection.state === 'loaded' ? objectDetection.model : undefined;
   const [foundObjects, setFoundObjects] = useState([]);
 
+
+
   const convertSnapshotToTensor = async () => {
     const imageUri = Image.resolveAssetSource(exampleImage).uri
+    // // const imageUri = 'file:///data/user/0/com.cardgame/cache/be8e1073-64e0-4ada-a91b-ef2cff09a447.JPEG'
 
     const convertedArray = await convertToRGB(imageUri);
-    return new Float32Array(convertedArray);
+    const array = new Float32Array(convertedArray);
+
+    return array
   };
 
   const processImage = async () => {
@@ -93,12 +97,14 @@ const CameraDetect = () => {
       const inputTensor = await convertSnapshotToTensor();
       console.log('AI inputTensor:', inputTensor.length); // 1228800
 
+      if (!inputTensor) {
+        throw new Error('Input tensor is undefined');
+      }
+
       const outputs = await model.run([inputTensor]);
       const detectedOut = outputs[0];
       console.log('AI detectedOut:', typeof detectedOut, detectedOut.length); //470400
 
-
-      // {0: 0.00684365164488554, 1: 0.014545511454343796, 2: 0.03440625220537186, 3: 0.04361765831708908, 4: 0.06502525508403778, 5: 0.07454034686088562, 6: 0.07542651146650314, 7: 0.09879051148891449, 8: 0.10943212360143661, 9: 0.11512817442417145,…}
 
       const parsedYoloModels = parseYOLOOutput(detectedOut, 0.5, 0.4);
       console.log('AI parsedYoloModels:', parsedYoloModels.length);
@@ -109,49 +115,6 @@ const CameraDetect = () => {
         console.log('AI model:', classLabels[model.classId], model);
       })
 
-      // 2. Run model with given input buffer synchronously
-      // const outputs = model.runSync([inputTensor])
-
-      // 3. Interpret outputs accordingly
-      // const detection_boxes = outputs[0]
-      // const detection_classes = outputs[1]
-      // const detection_scores = outputs[2]
-      // const num_detections = outputs[3]
-      // console.log(`Detected ${num_detections[0]} objects!`)
-      //
-      // for (let i = 0; i < detection_boxes.length; i += 4) {
-      //   const confidence = detection_scores[i / 4]
-      //   if (confidence > 0.4) {
-      //     // 4. Draw a red box around the detected object!
-      //     const left = detection_boxes[i]
-      //     const top = detection_boxes[i + 1]
-      //     const right = detection_boxes[i + 2]
-      //     const bottom = detection_boxes[i + 3]
-      //     // const rect = SkRect.Make(left, top, right, bottom)
-      //     // canvas.drawRect(rect, SkColors.Red)
-      //     console.log('Detected object:', left, top, right, bottom, detection_classes[i / 4], confidence)
-      //   }
-      // }
-
-      // 3. Interpret outputs accordinglyr
-      // const detection_boxes = outputs[0];
-      // const detection_classes = outputs[1];
-      // const detection_scores = outputs[2];
-      // const num_detections = outputs[3];
-      // console.log(`Detected ${num_detections[0]} objects!`);
-      //
-      // for (let i = 0; i < detection_boxes.length; i += 4) {
-      //   const confidence = detection_scores[i / 4];
-      //   if (confidence > 0.7) {
-      //     // 4. Draw a red box around the detected object!
-      //     const left = detection_boxes[i];
-      //     const top = detection_boxes[i + 1];
-      //     const right = detection_boxes[i + 2];
-      //     const bottom = detection_boxes[i + 3];
-      //     // const rect = SkRect.Make(left, top, right, bottom);
-      //     // canvas.drawRect(rect, SkColors.Red);
-      //   }
-      // }
     } catch (error) {
       console.error('Error running model:', error);
     }
@@ -168,27 +131,43 @@ const CameraDetect = () => {
     // Reshape the tensor
     const detections = [];
     for (let i = 0; i < numDetections; i++) {
-      const row = [];
-      for (let j = 0; j < numChannels; j++) {
-        row.push(outputTensor[i * numChannels + j]);
+      const xc = outputTensor[i];
+      const yc = outputTensor[i + numDetections];
+      const w = outputTensor[i + numDetections * 2];
+      const h = outputTensor[i + numDetections * 3];
+      // also use here all the channels: numChannels
+      const classes = []
+      for(let j = 4; j < numChannels; j++) {
+        classes.push(outputTensor[i + numDetections * j]);
       }
-      detections.push(row);
+
+      const confidence = Math.max(...classes);
+
+      detections.push({
+        xc,
+        yc,
+        w,
+        h,
+        confidence,
+        classes
+      });
     }
-    console.log("Frist row", detections[0])
 
     // Filter detections based on confidence
-    const filteredDetections = detections.filter(detection => detection[4] > confidenceThreshold);
+    const filteredDetections = detections.filter(detection => detection.confidence > confidenceThreshold);
+
+    console.log('filteredDetections', filteredDetections.length)
 
     // Non-Maximum Suppression (NMS)
-    const nmsDetections = nonMaximumSuppression(filteredDetections, iouThreshold);
+    // const nmsDetections = nonMaximumSuppression(filteredDetections, iouThreshold);
 
     // Parse and format the results
-    const results = nmsDetections.map(detection => {
+    const results = filteredDetections.map(detection => {
       // Extract bounding box coordinates
-      const xCenter = detection[0];
-      const yCenter = detection[1];
-      const width = detection[2];
-      const height = detection[3];
+      const xCenter = detection.xc;
+      const yCenter = detection.yc;
+      const width = detection.w;
+      const height = detection.h;
 
       const xMin = (xCenter - width / 2) * imageW;
       const yMin = (yCenter - height / 2) * imageH;
@@ -196,11 +175,11 @@ const CameraDetect = () => {
       const yMax = (yCenter + height / 2) * imageH;
 
       // Extract class probabilities (assuming classes start at index 5)
-      const classProbabilities = detection.slice(5, 85); // Assuming 80 classes.
+      const classProbabilities = detection.classes
       const classId = classProbabilities.indexOf(Math.max(...classProbabilities));
 
       // Confidence
-      const confidence = detection[4];
+      const confidence = detection.confidence
 
       return {
         xMin: xMin,
@@ -216,7 +195,7 @@ const CameraDetect = () => {
   }
 
   // Non-Maximum Suppression (NMS) Implementation (Simplified)
-  function nonMaximumSuppression(detections, iouThreshold) {
+  /*function nonMaximumSuppression(detections, iouThreshold) {
     detections.sort((a, b) => b[4] - a[4]); // Sort by confidence (objectness score)
 
     const selected = [];
@@ -267,15 +246,16 @@ const CameraDetect = () => {
     const unionArea = box1Area + box2Area - intersectArea;
 
     return intersectArea / unionArea;
-  }
+  }*/
 
   return (
     <View style={styles.container}>
       <Button title="Process" onPress={processImage} />
 
-      <View style={{width: imageW , height: imageH , backgroundColor: '#ff000050'}}>
+      <View style={{width: imageW , height: imageH , backgroundColor: '#ff000010'}}>
+
         <Image
-          source={require('../../assets/example.jpg')}
+          source={exampleImage}
           style={{width: imageW, height: imageH, position: 'absolute', opacity: 0.5}}
         />
 
